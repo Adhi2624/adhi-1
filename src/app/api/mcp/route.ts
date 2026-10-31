@@ -2,8 +2,55 @@ import { NextRequest, NextResponse } from "next/server";
 import { MCP_SERVER_INFO, MCP_TOOLS, MCP_RESOURCES } from "@/lib/mcp-schema";
 import { templates, getTemplate } from "@/lib/templates";
 import { getDb } from "@/lib/db";
+import { verifyToken } from "@/lib/auth";
 
-const MCP_USER_ID = "mcp-agent";
+const MCP_API_KEY = process.env.MCP_API_KEY || "";
+
+function authenticateMcp(request: NextRequest): { ok: true; userId: string } | { ok: false; error: string } {
+  const authHeader = request.headers.get("authorization");
+
+  if (!MCP_API_KEY) {
+    return { ok: true, userId: "mcp-agent" };
+  }
+
+  if (!authHeader) {
+    return { ok: false, error: "Authentication required. Set Authorization: Bearer <key> header." };
+  }
+
+  const [scheme, token] = authHeader.split(" ", 2);
+
+  if (scheme?.toLowerCase() === "bearer" && token === MCP_API_KEY) {
+    return { ok: true, userId: "mcp-agent" };
+  }
+
+  if (scheme?.toLowerCase() === "bearer" && token) {
+    const decoded = decodeJwtSync(token);
+    if (decoded) {
+      return { ok: true, userId: decoded };
+    }
+  }
+
+  return { ok: false, error: "Invalid API key or token." };
+}
+
+function decodeJwtSync(token: string): string | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+    if (payload.id && typeof payload.id === "string") {
+      return payload.id;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function verifyMcpToken(token: string): Promise<string | null> {
+  const payload = await verifyToken(token);
+  return payload?.id ?? null;
+}
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -24,7 +71,7 @@ function jsonrpcError(
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
-async function handleToolCall(name: string, args: Record<string, unknown>) {
+async function handleToolCall(name: string, args: Record<string, unknown>, userId: string) {
   const db = await getDb();
 
   switch (name) {
@@ -43,7 +90,7 @@ async function handleToolCall(name: string, args: Record<string, unknown>) {
 
     case "create_resume": {
       const resume = await db.createResume(
-        MCP_USER_ID,
+        userId,
         args.name as string,
         args.latex as string
       );
@@ -73,7 +120,7 @@ async function handleToolCall(name: string, args: Record<string, unknown>) {
     }
 
     case "list_resumes": {
-      const resumes = await db.listResumes();
+      const resumes = await db.listResumesByUser(userId);
       return resumes.map(({ id, name, createdAt, updatedAt }) => ({
         id,
         name,
@@ -97,7 +144,7 @@ async function handleToolCall(name: string, args: Record<string, unknown>) {
   }
 }
 
-async function handleRequest(req: JsonRpcRequest) {
+async function handleRequest(req: JsonRpcRequest, userId: string) {
   switch (req.method) {
     case "initialize":
       return jsonrpcResponse(req.id, {
@@ -117,7 +164,7 @@ async function handleRequest(req: JsonRpcRequest) {
         name: string;
         arguments?: Record<string, unknown>;
       };
-      const result = await handleToolCall(params.name, params.arguments || {});
+      const result = await handleToolCall(params.name, params.arguments || {}, userId);
       return jsonrpcResponse(req.id, {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       });
@@ -158,8 +205,29 @@ async function handleRequest(req: JsonRpcRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = authenticateMcp(request);
+  if (!auth.ok) {
+    return NextResponse.json(
+      { jsonrpc: "2.0", id: null, error: { code: -32000, message: auth.error } },
+      { status: 401 }
+    );
+  }
+
+  let userId = auth.userId;
+
+  if (userId === "mcp-agent") {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader) {
+      const [, token] = authHeader.split(" ", 2);
+      if (token && token !== MCP_API_KEY) {
+        const resolvedId = await verifyMcpToken(token);
+        if (resolvedId) userId = resolvedId;
+      }
+    }
+  }
+
   const body = (await request.json()) as JsonRpcRequest;
-  const response = await handleRequest(body);
+  const response = await handleRequest(body, userId);
   if (!response) {
     return new NextResponse(null, { status: 204 });
   }
@@ -173,6 +241,9 @@ export async function GET() {
     description: MCP_SERVER_INFO.description,
     mcp_endpoint: "/api/mcp",
     transport: "streamable-http",
+    authentication: MCP_API_KEY
+      ? "Required. Use Authorization: Bearer <MCP_API_KEY> or Bearer <session-jwt>"
+      : "Not required (set MCP_API_KEY env var to enable)",
     instructions:
       "Send JSON-RPC 2.0 requests via POST. Supports MCP protocol version 2024-11-05.",
     available_tools: MCP_TOOLS.map((t) => ({

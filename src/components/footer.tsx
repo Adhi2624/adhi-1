@@ -9,7 +9,7 @@ export default function Footer() {
   return (
     <footer className="border-t border-neutral-800 bg-neutral-950">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 py-12">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
           <div className="col-span-2 md:col-span-1">
             <div className="flex items-center gap-2 mb-4">
               <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
@@ -112,6 +112,30 @@ export default function Footer() {
               </li>
             </ul>
           </div>
+
+          <div>
+            <h4 className="text-sm font-medium text-neutral-300 mb-3">
+              Legal
+            </h4>
+            <ul className="space-y-2">
+              <li>
+                <Link
+                  href="/privacy"
+                  className="text-sm text-neutral-500 hover:text-white transition-colors"
+                >
+                  Privacy Policy
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/terms"
+                  className="text-sm text-neutral-500 hover:text-white transition-colors"
+                >
+                  Terms of Service
+                </Link>
+              </li>
+            </ul>
+          </div>
         </div>
 
         <div className="mt-10 pt-6 border-t border-neutral-800 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -120,13 +144,13 @@ export default function Footer() {
           </p>
           <div className="flex gap-4">
             <Link
-              href="#"
+              href="/privacy"
               className="text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
             >
               Privacy
             </Link>
             <Link
-              href="#"
+              href="/terms"
               className="text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
             >
               Terms
