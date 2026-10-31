@@ -7,12 +7,9 @@ import type {
   Resume,
   CreateUserInput,
   UpdateResumeInput,
+  EmailToken,
 } from "./types";
 
-/**
- * Cloudflare D1 binding interface.
- * In a Cloudflare Workers/Pages environment, this is available via env.DB.
- */
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
   batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
@@ -37,6 +34,20 @@ interface D1ExecResult {
   duration: number;
 }
 
+interface D1UserRow {
+  id: string;
+  name: string;
+  email: string;
+  passwordHash: string;
+  role: UserRole;
+  emailVerified: number;
+  createdAt: string;
+}
+
+function rowToUser(row: D1UserRow): User {
+  return { ...row, emailVerified: Boolean(row.emailVerified) };
+}
+
 function toSafe(user: User): SafeUser {
   const { passwordHash: _, ...safe } = user;
   return safe;
@@ -49,6 +60,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   passwordHash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
+  emailVerified INTEGER NOT NULL DEFAULT 0,
   createdAt TEXT NOT NULL
 );
 
@@ -61,8 +73,28 @@ CREATE TABLE IF NOT EXISTS resumes (
   updatedAt TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS email_tokens (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  type TEXT NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  expiresAt TEXT NOT NULL,
+  usedAt TEXT,
+  createdAt TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS email_rate_limits (
+  email TEXT NOT NULL,
+  type TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  windowStart TEXT NOT NULL,
+  PRIMARY KEY (email, type, windowStart)
+);
+
 CREATE INDEX IF NOT EXISTS idx_resumes_userId ON resumes(userId);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_email_tokens_token ON email_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_lookup ON email_rate_limits(email, type, windowStart);
 `;
 
 export class D1Adapter implements DbAdapter {
@@ -83,6 +115,8 @@ export class D1Adapter implements DbAdapter {
     if (!this.initialized) await this.init();
   }
 
+  // --- Users ---
+
   async createUser(input: CreateUserInput): Promise<SafeUser> {
     await this.ensureInit();
     const id = uuidv4();
@@ -96,37 +130,40 @@ export class D1Adapter implements DbAdapter {
 
     await this.db
       .prepare(
-        "INSERT INTO users (id, name, email, passwordHash, role, createdAt) VALUES (?, ?, ?, ?, 'user', ?)"
+        "INSERT INTO users (id, name, email, passwordHash, role, emailVerified, createdAt) VALUES (?, ?, ?, ?, 'user', 0, ?)"
       )
       .bind(id, input.name, input.email, input.passwordHash, createdAt)
       .run();
 
-    return { id, name: input.name, email: input.email, role: "user", createdAt };
+    return { id, name: input.name, email: input.email, role: "user", emailVerified: false, createdAt };
   }
 
   async getUserByEmail(email: string): Promise<User | null> {
     await this.ensureInit();
-    return this.db
+    const row = await this.db
       .prepare("SELECT * FROM users WHERE email = ?")
       .bind(email)
-      .first<User>();
+      .first<D1UserRow>();
+    if (!row) return null;
+    return rowToUser(row);
   }
 
   async getUserById(id: string): Promise<SafeUser | null> {
     await this.ensureInit();
-    const user = await this.db
+    const row = await this.db
       .prepare("SELECT * FROM users WHERE id = ?")
       .bind(id)
-      .first<User>();
-    return user ? toSafe(user) : null;
+      .first<D1UserRow>();
+    if (!row) return null;
+    return toSafe(rowToUser(row));
   }
 
   async listUsers(): Promise<SafeUser[]> {
     await this.ensureInit();
     const result = await this.db
       .prepare("SELECT * FROM users ORDER BY createdAt DESC")
-      .all<User>();
-    return result.results.map(toSafe);
+      .all<D1UserRow>();
+    return result.results.map((r) => toSafe(rowToUser(r)));
   }
 
   async updateUserRole(id: string, role: UserRole): Promise<SafeUser | null> {
@@ -136,6 +173,24 @@ export class D1Adapter implements DbAdapter {
       .bind(role, id)
       .run();
     return this.getUserById(id);
+  }
+
+  async updateUserPassword(id: string, passwordHash: string): Promise<boolean> {
+    await this.ensureInit();
+    const result = await this.db
+      .prepare("UPDATE users SET passwordHash = ? WHERE id = ?")
+      .bind(passwordHash, id)
+      .run();
+    return (result.meta as Record<string, number>)?.changes > 0;
+  }
+
+  async setEmailVerified(id: string, verified: boolean): Promise<boolean> {
+    await this.ensureInit();
+    const result = await this.db
+      .prepare("UPDATE users SET emailVerified = ? WHERE id = ?")
+      .bind(verified ? 1 : 0, id)
+      .run();
+    return (result.meta as Record<string, number>)?.changes > 0;
   }
 
   async deleteUser(id: string): Promise<boolean> {
@@ -161,6 +216,8 @@ export class D1Adapter implements DbAdapter {
       .first<number>("count");
     return count || 0;
   }
+
+  // --- Resumes ---
 
   async createResume(
     userId: string,
@@ -258,5 +315,76 @@ export class D1Adapter implements DbAdapter {
       .bind(userId)
       .first<number>("count");
     return count || 0;
+  }
+
+  // --- Email tokens ---
+
+  async createEmailToken(
+    email: string,
+    type: EmailToken["type"],
+    token: string,
+    expiresAt: string
+  ): Promise<EmailToken> {
+    await this.ensureInit();
+    const id = uuidv4();
+    const createdAt = new Date().toISOString();
+
+    await this.db
+      .prepare(
+        "INSERT INTO email_tokens (id, email, type, token, expiresAt, usedAt, createdAt) VALUES (?, ?, ?, ?, ?, NULL, ?)"
+      )
+      .bind(id, email, type, token, expiresAt, createdAt)
+      .run();
+
+    return { id, email, type, token, expiresAt, usedAt: null, createdAt };
+  }
+
+  async getEmailToken(token: string, type: EmailToken["type"]): Promise<EmailToken | null> {
+    await this.ensureInit();
+    return this.db
+      .prepare(
+        "SELECT * FROM email_tokens WHERE token = ? AND type = ? AND usedAt IS NULL AND expiresAt > ?"
+      )
+      .bind(token, type, new Date().toISOString())
+      .first<EmailToken>();
+  }
+
+  async markEmailTokenUsed(token: string): Promise<boolean> {
+    await this.ensureInit();
+    const result = await this.db
+      .prepare("UPDATE email_tokens SET usedAt = ? WHERE token = ?")
+      .bind(new Date().toISOString(), token)
+      .run();
+    return (result.meta as Record<string, number>)?.changes > 0;
+  }
+
+  async deleteExpiredTokens(): Promise<number> {
+    await this.ensureInit();
+    const result = await this.db
+      .prepare("DELETE FROM email_tokens WHERE expiresAt < ? OR usedAt IS NOT NULL")
+      .bind(new Date().toISOString())
+      .run();
+    return (result.meta as Record<string, number>)?.changes ?? 0;
+  }
+
+  // --- Rate limiting ---
+
+  async getEmailSendCount(email: string, type: string, windowStart: string): Promise<number> {
+    await this.ensureInit();
+    const count = await this.db
+      .prepare("SELECT count FROM email_rate_limits WHERE email = ? AND type = ? AND windowStart = ?")
+      .bind(email, type, windowStart)
+      .first<number>("count");
+    return count ?? 0;
+  }
+
+  async incrementEmailSendCount(email: string, type: string, windowStart: string): Promise<void> {
+    await this.ensureInit();
+    await this.db
+      .prepare(
+        "INSERT INTO email_rate_limits (email, type, count, windowStart) VALUES (?, ?, 1, ?) ON CONFLICT(email, type, windowStart) DO UPDATE SET count = count + 1"
+      )
+      .bind(email, type, windowStart)
+      .run();
   }
 }

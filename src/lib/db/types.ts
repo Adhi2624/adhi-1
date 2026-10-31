@@ -6,6 +6,7 @@ export interface User {
   email: string;
   passwordHash: string;
   role: UserRole;
+  emailVerified: boolean;
   createdAt: string;
 }
 
@@ -29,4 +30,21 @@ export interface CreateUserInput {
 export interface UpdateResumeInput {
   name?: string;
   latex?: string;
+}
+
+export interface EmailToken {
+  id: string;
+  email: string;
+  type: "verification" | "password-reset";
+  token: string;
+  expiresAt: string;
+  usedAt: string | null;
+  createdAt: string;
+}
+
+export interface EmailRateLimit {
+  email: string;
+  type: string;
+  count: number;
+  windowStart: string;
 }

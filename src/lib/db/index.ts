@@ -79,4 +79,6 @@ export type {
   Resume,
   CreateUserInput,
   UpdateResumeInput,
+  EmailToken,
+  EmailRateLimit,
 } from "./types";

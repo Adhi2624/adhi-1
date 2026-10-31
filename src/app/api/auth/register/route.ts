@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { registerUser, createToken, setSessionCookie } from "@/lib/auth";
+import { sendVerificationEmail } from "@/lib/email/tokens";
 
 export async function POST(request: NextRequest) {
   const { name, email, password } = await request.json();
@@ -22,6 +23,9 @@ export async function POST(request: NextRequest) {
     const user = await registerUser(name, email, password);
     const token = await createToken(user);
     await setSessionCookie(token);
+
+    sendVerificationEmail(email).catch(() => {});
+
     return NextResponse.json({ user }, { status: 201 });
   } catch (err: unknown) {
     const message =

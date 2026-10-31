@@ -7,6 +7,7 @@ import type {
   Resume,
   CreateUserInput,
   UpdateResumeInput,
+  EmailToken,
 } from "./types";
 
 function toSafe(user: User): SafeUser {
@@ -18,6 +19,10 @@ export class MemoryAdapter implements DbAdapter {
   private users = new Map<string, User>();
   private emailIndex = new Map<string, string>();
   private resumes = new Map<string, Resume>();
+  private emailTokens = new Map<string, EmailToken>();
+  private rateLimits = new Map<string, { count: number; windowStart: string }>();
+
+  // --- Users ---
 
   async createUser(input: CreateUserInput): Promise<SafeUser> {
     if (this.emailIndex.has(input.email)) {
@@ -30,6 +35,7 @@ export class MemoryAdapter implements DbAdapter {
       email: input.email,
       passwordHash: input.passwordHash,
       role: "user",
+      emailVerified: false,
       createdAt: new Date().toISOString(),
     };
     this.users.set(id, user);
@@ -65,6 +71,22 @@ export class MemoryAdapter implements DbAdapter {
     return toSafe(user);
   }
 
+  async updateUserPassword(id: string, passwordHash: string): Promise<boolean> {
+    const user = this.users.get(id);
+    if (!user) return false;
+    user.passwordHash = passwordHash;
+    this.users.set(id, user);
+    return true;
+  }
+
+  async setEmailVerified(id: string, verified: boolean): Promise<boolean> {
+    const user = this.users.get(id);
+    if (!user) return false;
+    user.emailVerified = verified;
+    this.users.set(id, user);
+    return true;
+  }
+
   async deleteUser(id: string): Promise<boolean> {
     const user = this.users.get(id);
     if (!user) return false;
@@ -75,6 +97,8 @@ export class MemoryAdapter implements DbAdapter {
   async getUserCount(): Promise<number> {
     return this.users.size;
   }
+
+  // --- Resumes ---
 
   async createResume(
     userId: string,
@@ -133,5 +157,74 @@ export class MemoryAdapter implements DbAdapter {
     return Array.from(this.resumes.values()).filter(
       (r) => r.userId === userId
     ).length;
+  }
+
+  // --- Email tokens ---
+
+  async createEmailToken(
+    email: string,
+    type: EmailToken["type"],
+    token: string,
+    expiresAt: string
+  ): Promise<EmailToken> {
+    const entry: EmailToken = {
+      id: uuidv4(),
+      email,
+      type,
+      token,
+      expiresAt,
+      usedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    this.emailTokens.set(token, entry);
+    return entry;
+  }
+
+  async getEmailToken(token: string, type: EmailToken["type"]): Promise<EmailToken | null> {
+    const entry = this.emailTokens.get(token);
+    if (!entry || entry.type !== type) return null;
+    if (entry.usedAt) return null;
+    if (new Date(entry.expiresAt) < new Date()) return null;
+    return entry;
+  }
+
+  async markEmailTokenUsed(token: string): Promise<boolean> {
+    const entry = this.emailTokens.get(token);
+    if (!entry) return false;
+    entry.usedAt = new Date().toISOString();
+    this.emailTokens.set(token, entry);
+    return true;
+  }
+
+  async deleteExpiredTokens(): Promise<number> {
+    const now = new Date();
+    let count = 0;
+    for (const [key, entry] of this.emailTokens) {
+      if (new Date(entry.expiresAt) < now || entry.usedAt) {
+        this.emailTokens.delete(key);
+        count++;
+      }
+    }
+    return count;
+  }
+
+  // --- Rate limiting ---
+
+  async getEmailSendCount(email: string, type: string, windowStart: string): Promise<number> {
+    const key = `${email}:${type}`;
+    const entry = this.rateLimits.get(key);
+    if (!entry || entry.windowStart !== windowStart) return 0;
+    return entry.count;
+  }
+
+  async incrementEmailSendCount(email: string, type: string, windowStart: string): Promise<void> {
+    const key = `${email}:${type}`;
+    const entry = this.rateLimits.get(key);
+    if (!entry || entry.windowStart !== windowStart) {
+      this.rateLimits.set(key, { count: 1, windowStart });
+    } else {
+      entry.count++;
+      this.rateLimits.set(key, entry);
+    }
   }
 }
