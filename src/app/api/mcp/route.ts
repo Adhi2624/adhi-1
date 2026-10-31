@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MCP_SERVER_INFO, MCP_TOOLS, MCP_RESOURCES } from "@/lib/mcp-schema";
 import { templates, getTemplate } from "@/lib/templates";
-import * as store from "@/lib/resume-store";
+import { getDb } from "@/lib/db";
 
 const MCP_USER_ID = "mcp-agent";
 
@@ -24,7 +24,9 @@ function jsonrpcError(
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
-function handleToolCall(name: string, args: Record<string, unknown>) {
+async function handleToolCall(name: string, args: Record<string, unknown>) {
+  const db = await getDb();
+
   switch (name) {
     case "list_templates":
       return templates.map(({ id, name, description }) => ({
@@ -40,7 +42,7 @@ function handleToolCall(name: string, args: Record<string, unknown>) {
     }
 
     case "create_resume": {
-      const resume = store.createResume(
+      const resume = await db.createResume(
         MCP_USER_ID,
         args.name as string,
         args.latex as string
@@ -49,13 +51,13 @@ function handleToolCall(name: string, args: Record<string, unknown>) {
     }
 
     case "get_resume": {
-      const resume = store.getResume(args.resume_id as string);
+      const resume = await db.getResume(args.resume_id as string);
       if (!resume) return { error: "Resume not found" };
       return resume;
     }
 
     case "update_resume": {
-      const resume = store.updateResume(args.resume_id as string, {
+      const resume = await db.updateResume(args.resume_id as string, {
         name: args.name as string | undefined,
         latex: args.latex as string | undefined,
       });
@@ -64,22 +66,24 @@ function handleToolCall(name: string, args: Record<string, unknown>) {
     }
 
     case "delete_resume": {
-      const ok = store.deleteResume(args.resume_id as string);
+      const ok = await db.deleteResume(args.resume_id as string);
       return ok
         ? { message: "Resume deleted" }
         : { error: "Resume not found" };
     }
 
-    case "list_resumes":
-      return store.listResumes().map(({ id, name, createdAt, updatedAt }) => ({
+    case "list_resumes": {
+      const resumes = await db.listResumes();
+      return resumes.map(({ id, name, createdAt, updatedAt }) => ({
         id,
         name,
         createdAt,
         updatedAt,
       }));
+    }
 
     case "compile_resume": {
-      const resume = store.getResume(args.resume_id as string);
+      const resume = await db.getResume(args.resume_id as string);
       if (!resume) return { error: "Resume not found" };
       return {
         message: "Open the editor URL to see the compiled PDF preview",
@@ -93,7 +97,7 @@ function handleToolCall(name: string, args: Record<string, unknown>) {
   }
 }
 
-function handleRequest(req: JsonRpcRequest) {
+async function handleRequest(req: JsonRpcRequest) {
   switch (req.method) {
     case "initialize":
       return jsonrpcResponse(req.id, {
@@ -113,7 +117,7 @@ function handleRequest(req: JsonRpcRequest) {
         name: string;
         arguments?: Record<string, unknown>;
       };
-      const result = handleToolCall(params.name, params.arguments || {});
+      const result = await handleToolCall(params.name, params.arguments || {});
       return jsonrpcResponse(req.id, {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       });
@@ -155,7 +159,7 @@ function handleRequest(req: JsonRpcRequest) {
 
 export async function POST(request: NextRequest) {
   const body = (await request.json()) as JsonRpcRequest;
-  const response = handleRequest(body);
+  const response = await handleRequest(body);
   if (!response) {
     return new NextResponse(null, { status: 204 });
   }

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { getUserCount, listUsers } from "@/lib/user-store";
-import { getResumeCount } from "@/lib/resume-store";
+import { getDb } from "@/lib/db";
 
 export async function GET() {
   const session = await getSession();
@@ -9,15 +8,20 @@ export async function GET() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const users = listUsers();
+  const db = await getDb();
+  const [users, totalUsers, totalResumes] = await Promise.all([
+    db.listUsers(),
+    db.getUserCount(),
+    db.getResumeCount(),
+  ]);
+
   const weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
 
   return NextResponse.json({
-    totalUsers: getUserCount(),
-    totalResumes: getResumeCount(),
+    totalUsers,
+    totalResumes,
     admins: users.filter((u) => u.role === "admin").length,
     recentUsers: users.filter((u) => new Date(u.createdAt) > weekAgo).length,
   });
 }
-

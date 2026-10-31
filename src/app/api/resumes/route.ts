@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import * as store from "@/lib/resume-store";
+import { getDb } from "@/lib/db";
 
 export async function GET() {
   const session = await getSession();
   if (!session) {
     return NextResponse.json([], { status: 200 });
   }
-  return NextResponse.json(store.listResumesByUser(session.id));
+  const db = await getDb();
+  return NextResponse.json(await db.listResumesByUser(session.id));
 }
 
 export async function POST(request: NextRequest) {
@@ -23,6 +24,8 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  const resume = store.createResume(session.id, name, latex);
+
+  const db = await getDb();
+  const resume = await db.createResume(session.id, name, latex);
   return NextResponse.json(resume, { status: 201 });
 }

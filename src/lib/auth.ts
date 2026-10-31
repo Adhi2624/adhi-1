@@ -1,6 +1,8 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
-import type { SafeUser, UserRole } from "./user-store";
+import bcrypt from "bcryptjs";
+import { getDb } from "./db";
+import type { SafeUser, UserRole } from "./db";
 
 const SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "typeset-dev-secret-change-in-production"
@@ -58,6 +60,29 @@ export async function getSession(): Promise<JwtPayload | null> {
   const token = cookieStore.get(COOKIE_NAME)?.value;
   if (!token) return null;
   return verifyToken(token);
+}
+
+export async function registerUser(
+  name: string,
+  email: string,
+  password: string
+): Promise<SafeUser> {
+  const db = await getDb();
+  const hash = await bcrypt.hash(password, 10);
+  return db.createUser({ name, email, passwordHash: hash });
+}
+
+export async function verifyCredentials(
+  email: string,
+  password: string
+): Promise<SafeUser | null> {
+  const db = await getDb();
+  const user = await db.getUserByEmail(email);
+  if (!user) return null;
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) return null;
+  const { passwordHash: _, ...safe } = user;
+  return safe;
 }
 
 export { COOKIE_NAME, SECRET };

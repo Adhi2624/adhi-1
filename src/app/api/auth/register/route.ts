@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createUser } from "@/lib/user-store";
-import { createToken, setSessionCookie } from "@/lib/auth";
+import { registerUser, createToken, setSessionCookie } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   const { name, email, password } = await request.json();
@@ -19,14 +18,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const result = await createUser(name, email, password);
-
-  if ("error" in result) {
-    return NextResponse.json({ error: result.error }, { status: 409 });
+  try {
+    const user = await registerUser(name, email, password);
+    const token = await createToken(user);
+    await setSessionCookie(token);
+    return NextResponse.json({ user }, { status: 201 });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "Registration failed";
+    return NextResponse.json({ error: message }, { status: 409 });
   }
-
-  const token = await createToken(result);
-  await setSessionCookie(token);
-
-  return NextResponse.json({ user: result }, { status: 201 });
 }

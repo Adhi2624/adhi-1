@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import {
-  listUsers,
-  setUserRole,
-  deleteUser as removeUser,
-  type UserRole,
-} from "@/lib/user-store";
-import { getResumeCountByUser } from "@/lib/resume-store";
+import { getDb } from "@/lib/db";
+import type { UserRole } from "@/lib/db";
 
 export async function GET() {
   const session = await getSession();
@@ -14,12 +9,17 @@ export async function GET() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const users = listUsers().map((u) => ({
-    ...u,
-    resumeCount: getResumeCountByUser(u.id),
-  }));
+  const db = await getDb();
+  const users = await db.listUsers();
 
-  return NextResponse.json(users);
+  const usersWithCounts = await Promise.all(
+    users.map(async (u) => ({
+      ...u,
+      resumeCount: await db.getResumeCountByUser(u.id),
+    }))
+  );
+
+  return NextResponse.json(usersWithCounts);
 }
 
 export async function PATCH(request: NextRequest) {
@@ -36,7 +36,8 @@ export async function PATCH(request: NextRequest) {
     );
   }
 
-  const updated = setUserRole(userId, role as UserRole);
+  const db = await getDb();
+  const updated = await db.updateUserRole(userId, role as UserRole);
   if (!updated) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
@@ -59,7 +60,8 @@ export async function DELETE(request: NextRequest) {
     );
   }
 
-  const ok = removeUser(userId);
+  const db = await getDb();
+  const ok = await db.deleteUser(userId);
   if (!ok) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
