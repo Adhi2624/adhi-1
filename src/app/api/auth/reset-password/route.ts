@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { resetPasswordWithToken } from "@/lib/email/tokens";
+import { emailService } from "@/services/email-service";
 
 export async function POST(request: NextRequest) {
   const { token, password } = await request.json();
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
   }
 
   const newHash = await bcrypt.hash(password, 10);
-  const result = await resetPasswordWithToken(token, newHash);
+  const result = await emailService.resetPasswordWithToken(token, newHash);
 
   if (!result.reset) {
     return NextResponse.json(

@@ -1,31 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  verifyCredentials,
-  createToken,
-  setSessionCookie,
-} from "@/lib/auth";
+import { setSessionCookie } from "@/lib/auth";
+import { authService, AuthError } from "@/services/auth-service";
 
 export async function POST(request: NextRequest) {
-  const { email, password } = await request.json();
+  try {
+    const { email, password } = await request.json();
+    const { user, token } = await authService.login(email, password);
+    await setSessionCookie(token);
 
-  if (!email || !password) {
-    return NextResponse.json(
-      { error: "Email and password are required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ user });
+  } catch (err: unknown) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json({ error: "Login failed" }, { status: 500 });
   }
-
-  const user = await verifyCredentials(email, password);
-
-  if (!user) {
-    return NextResponse.json(
-      { error: "Invalid email or password" },
-      { status: 401 }
-    );
-  }
-
-  const token = await createToken(user);
-  await setSessionCookie(token);
-
-  return NextResponse.json({ user });
 }

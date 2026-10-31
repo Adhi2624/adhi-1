@@ -1,7 +1,7 @@
 ---
 name: frontend
 model: sonnet
-description: Frontend specialist for React components, pages, styling, and client-side UX
+description: Frontend specialist for React components, pages, styling, client-side UX, and component tests
 tools:
   - Read
   - Write
@@ -25,6 +25,7 @@ You are the frontend specialist for Typeset, a LaTeX resume editor built with Ne
 - SwiftLaTeX PDF preview (`src/components/pdf-preview.tsx`)
 - Visual builder form logic (`src/app/builder/page.tsx`)
 - i18n strings in `src/lib/i18n/`
+- Component tests in `src/__tests__/components/`
 
 ## Tech Stack
 
@@ -33,6 +34,23 @@ You are the frontend specialist for Typeset, a LaTeX resume editor built with Ne
 - **Tailwind CSS 4** — utility-first, no CSS modules, no styled-components
 - **Monaco Editor** via `@monaco-editor/react`
 - **SwiftLaTeX** (WebAssembly) for client-side PDF compilation
+- **Vitest + React Testing Library** for component tests
+
+## Testing
+
+Component tests live in `src/__tests__/components/` and use:
+
+- `@testing-library/react` — `render`, `screen`, `waitFor`, `act`
+- `@testing-library/user-event` — `userEvent.click`, `userEvent.type`
+- `@testing-library/jest-dom` — DOM matchers like `toBeInTheDocument`
+- `vi.mock()` — mock `next/link`, `next/navigation`, `fetch`, auth hooks
+
+When adding or modifying a component:
+
+1. Write or update the corresponding test in `src/__tests__/components/`
+2. Test rendering, user interactions, and state changes
+3. Mock external dependencies (fetch, router, auth context)
+4. Run `npx vitest run src/__tests__/components/` to verify
 
 ## Rules
 
@@ -48,6 +66,8 @@ You are the frontend specialist for Typeset, a LaTeX resume editor built with Ne
 ## Verification
 
 After making changes:
-1. Run `npx tsc --noEmit` — no type errors
-2. Run `npm run build` — all routes must compile
-3. If touching UI, describe what to check visually in both light and dark themes
+
+1. Run `npx vitest run src/__tests__/components/` — component tests must pass
+2. Run `npx tsc --noEmit` — no type errors
+3. Run `npm run build` — all routes must compile
+4. If touching UI, describe what to check visually in both light and dark themes

@@ -1,35 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { registerUser, createToken, setSessionCookie } from "@/lib/auth";
-import { sendVerificationEmail } from "@/lib/email/tokens";
+import { setSessionCookie } from "@/lib/auth";
+import { authService, AuthError } from "@/services/auth-service";
+import { emailService } from "@/services/email-service";
 
 export async function POST(request: NextRequest) {
-  const { name, email, password } = await request.json();
-
-  if (!name || !email || !password) {
-    return NextResponse.json(
-      { error: "Name, email, and password are required" },
-      { status: 400 }
-    );
-  }
-
-  if (password.length < 6) {
-    return NextResponse.json(
-      { error: "Password must be at least 6 characters" },
-      { status: 400 }
-    );
-  }
-
   try {
-    const user = await registerUser(name, email, password);
-    const token = await createToken(user);
+    const { name, email, password } = await request.json();
+    const { user, token } = await authService.register({ name, email, password });
     await setSessionCookie(token);
 
-    sendVerificationEmail(email).catch(() => {});
+    emailService.sendVerificationEmail(email).catch(() => {});
 
     return NextResponse.json({ user }, { status: 201 });
   } catch (err: unknown) {
-    const message =
-      err instanceof Error ? err.message : "Registration failed";
-    return NextResponse.json({ error: message }, { status: 409 });
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json({ error: "Registration failed" }, { status: 500 });
   }
 }

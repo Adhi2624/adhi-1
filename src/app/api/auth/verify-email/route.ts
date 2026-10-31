@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyEmailToken } from "@/lib/email/tokens";
+import { emailService } from "@/services/email-service";
 
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("token");
@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/login?error=invalid-token", request.url));
   }
 
-  const result = await verifyEmailToken(token);
+  const result = await emailService.verifyEmailToken(token);
 
   if (result.verified) {
     return NextResponse.redirect(new URL("/login?verified=true", request.url));

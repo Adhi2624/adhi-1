@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { getDb } from "@/lib/db";
+import { adminService, AdminError } from "@/services/admin-service";
 import type { UserRole } from "@/lib/db";
 
 export async function GET() {
@@ -9,17 +9,8 @@ export async function GET() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const db = await getDb();
-  const users = await db.listUsers();
-
-  const usersWithCounts = await Promise.all(
-    users.map(async (u) => ({
-      ...u,
-      resumeCount: await db.getResumeCountByUser(u.id),
-    }))
-  );
-
-  return NextResponse.json(usersWithCounts);
+  const users = await adminService.listUsersWithCounts();
+  return NextResponse.json(users);
 }
 
 export async function PATCH(request: NextRequest) {
@@ -28,21 +19,16 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { userId, role } = await request.json();
-  if (!userId || !role) {
-    return NextResponse.json(
-      { error: "userId and role required" },
-      { status: 400 }
-    );
+  try {
+    const { userId, role } = await request.json();
+    const updated = await adminService.updateUserRole(userId, role as UserRole);
+    return NextResponse.json(updated);
+  } catch (err: unknown) {
+    if (err instanceof AdminError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json({ error: "Failed to update role" }, { status: 500 });
   }
-
-  const db = await getDb();
-  const updated = await db.updateUserRole(userId, role as UserRole);
-  if (!updated) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
-  }
-
-  return NextResponse.json(updated);
 }
 
 export async function DELETE(request: NextRequest) {
@@ -51,20 +37,14 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { userId } = await request.json();
-
-  if (userId === session.id) {
-    return NextResponse.json(
-      { error: "Cannot delete yourself" },
-      { status: 400 }
-    );
+  try {
+    const { userId } = await request.json();
+    await adminService.deleteUser(userId, session.id);
+    return NextResponse.json({ message: "Deleted" });
+  } catch (err: unknown) {
+    if (err instanceof AdminError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json({ error: "Failed to delete user" }, { status: 500 });
   }
-
-  const db = await getDb();
-  const ok = await db.deleteUser(userId);
-  if (!ok) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
-  }
-
-  return NextResponse.json({ message: "Deleted" });
 }

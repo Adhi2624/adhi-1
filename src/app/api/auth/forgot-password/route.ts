@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sendPasswordResetEmail } from "@/lib/email/tokens";
+import { emailService } from "@/services/email-service";
 
 export async function POST(request: NextRequest) {
   const { email } = await request.json();
@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const result = await sendPasswordResetEmail(email);
+  const result = await emailService.sendPasswordResetEmail(email);
 
   if (!result.sent && result.error) {
     return NextResponse.json(

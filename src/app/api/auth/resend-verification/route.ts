@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { sendVerificationEmail } from "@/lib/email/tokens";
+import { emailService } from "@/services/email-service";
 
 export async function POST(_request: NextRequest) {
   const session = await getSession();
@@ -8,7 +8,7 @@ export async function POST(_request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await sendVerificationEmail(session.email);
+  const result = await emailService.sendVerificationEmail(session.email);
 
   if (!result.sent && result.error) {
     return NextResponse.json(
