@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 
 export interface Resume {
   id: string;
+  userId: string;
   name: string;
   latex: string;
   createdAt: string;
@@ -10,10 +11,21 @@ export interface Resume {
 
 const resumes = new Map<string, Resume>();
 
-export function createResume(name: string, latex: string): Resume {
+export function createResume(
+  userId: string,
+  name: string,
+  latex: string
+): Resume {
   const id = uuidv4();
   const now = new Date().toISOString();
-  const resume: Resume = { id, name, latex, createdAt: now, updatedAt: now };
+  const resume: Resume = {
+    id,
+    userId,
+    name,
+    latex,
+    createdAt: now,
+    updatedAt: now,
+  };
   resumes.set(id, resume);
   return resume;
 }
@@ -43,4 +55,21 @@ export function listResumes(): Resume[] {
   return Array.from(resumes.values()).sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
   );
+}
+
+export function listResumesByUser(userId: string): Resume[] {
+  return Array.from(resumes.values())
+    .filter((r) => r.userId === userId)
+    .sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+}
+
+export function getResumeCount(): number {
+  return resumes.size;
+}
+
+export function getResumeCountByUser(userId: string): number {
+  return Array.from(resumes.values()).filter((r) => r.userId === userId).length;
 }

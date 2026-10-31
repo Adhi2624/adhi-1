@@ -3,6 +3,8 @@ import { MCP_SERVER_INFO, MCP_TOOLS, MCP_RESOURCES } from "@/lib/mcp-schema";
 import { templates, getTemplate } from "@/lib/templates";
 import * as store from "@/lib/resume-store";
 
+const MCP_USER_ID = "mcp-agent";
+
 interface JsonRpcRequest {
   jsonrpc: "2.0";
   id?: string | number;
@@ -39,6 +41,7 @@ function handleToolCall(name: string, args: Record<string, unknown>) {
 
     case "create_resume": {
       const resume = store.createResume(
+        MCP_USER_ID,
         args.name as string,
         args.latex as string
       );

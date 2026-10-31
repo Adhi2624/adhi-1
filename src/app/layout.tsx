@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { AuthProvider } from "@/components/auth-provider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LaTeX Resume Editor",
+  title: "Typeset — Beautiful Resumes, Effortlessly",
   description:
-    "Create professional resumes with LaTeX. AI-powered via MCP protocol.",
+    "Create professional LaTeX resumes with a visual builder, code editor, or AI agents via MCP. Free to use, deploy on Vercel.",
 };
 
 export default function RootLayout({
@@ -25,7 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <head>
         <Script
           src="https://cdn.jsdelivr.net/npm/swiftlatex-engine@0.0.1/PdfTeXEngine.js"
@@ -33,9 +34,9 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-neutral-950 text-white`}
       >
-        {children}
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );
