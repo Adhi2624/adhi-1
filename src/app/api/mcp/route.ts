@@ -3,6 +3,8 @@ import { MCP_SERVER_INFO, MCP_TOOLS, MCP_RESOURCES } from "@/lib/mcp-schema";
 import { templates, getTemplate } from "@/lib/templates";
 import { getDb } from "@/lib/db";
 import { verifyToken } from "@/lib/auth";
+import { configService } from "@/services/config-service";
+import type { TierLimits, PricingTier } from "@/lib/db/types";
 
 const MCP_API_KEY = process.env.MCP_API_KEY || "";
 
@@ -50,6 +52,39 @@ function decodeJwtSync(token: string): string | null {
 async function verifyMcpToken(token: string): Promise<string | null> {
   const payload = await verifyToken(token);
   return payload?.id ?? null;
+}
+
+async function checkMcpRateLimit(userId: string): Promise<{ allowed: boolean; error?: string }> {
+  if (userId === "mcp-agent") return { allowed: true };
+
+  const db = await getDb();
+  const user = await db.getUserById(userId);
+  if (!user) return { allowed: false, error: "User not found" };
+
+  const tier = (user.tier || "free") as PricingTier;
+  const limits: TierLimits = await configService.getTierLimits(tier);
+
+  if (!limits.mcpAccess) {
+    return { allowed: false, error: `MCP access not available on ${tier} tier. Upgrade to pro or team.` };
+  }
+
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const [hourlyCount, dailyCount] = await Promise.all([
+    db.getMcpCallCount(userId, oneHourAgo),
+    db.getMcpCallCount(userId, oneDayAgo),
+  ]);
+
+  if (limits.maxMcpCallsPerHour > 0 && hourlyCount >= limits.maxMcpCallsPerHour) {
+    return { allowed: false, error: `Hourly MCP call limit reached (${limits.maxMcpCallsPerHour}/hour for ${tier} tier)` };
+  }
+
+  if (limits.maxMcpCallsPerDay > 0 && dailyCount >= limits.maxMcpCallsPerDay) {
+    return { allowed: false, error: `Daily MCP call limit reached (${limits.maxMcpCallsPerDay}/day for ${tier} tier)` };
+  }
+
+  return { allowed: true };
 }
 
 interface JsonRpcRequest {
@@ -160,10 +195,19 @@ async function handleRequest(req: JsonRpcRequest, userId: string) {
       return jsonrpcResponse(req.id, { tools: MCP_TOOLS });
 
     case "tools/call": {
+      const rateCheck = await checkMcpRateLimit(userId);
+      if (!rateCheck.allowed) {
+        return jsonrpcError(req.id, -32000, rateCheck.error!);
+      }
+
       const params = req.params as {
         name: string;
         arguments?: Record<string, unknown>;
       };
+
+      const db = await getDb();
+      await db.logMcpCall(userId, req.method, params.name);
+
       const result = await handleToolCall(params.name, params.arguments || {}, userId);
       return jsonrpcResponse(req.id, {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

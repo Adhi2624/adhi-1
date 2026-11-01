@@ -4,13 +4,17 @@ import type {
   User,
   SafeUser,
   UserRole,
+  PricingTier,
   Resume,
   CreateUserInput,
   UpdateResumeInput,
   EmailToken,
+  McpCallLog,
+  PlatformConfig,
 } from "./types";
 
 function toSafe(user: User): SafeUser {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { passwordHash: _, ...safe } = user;
   return safe;
 }
@@ -21,6 +25,8 @@ export class MemoryAdapter implements DbAdapter {
   private resumes = new Map<string, Resume>();
   private emailTokens = new Map<string, EmailToken>();
   private rateLimits = new Map<string, { count: number; windowStart: string }>();
+  private mcpCalls: McpCallLog[] = [];
+  private config = new Map<string, PlatformConfig>();
 
   // --- Users ---
 
@@ -35,6 +41,7 @@ export class MemoryAdapter implements DbAdapter {
       email: input.email,
       passwordHash: input.passwordHash,
       role: "user",
+      tier: "free",
       emailVerified: false,
       createdAt: new Date().toISOString(),
     };
@@ -71,6 +78,14 @@ export class MemoryAdapter implements DbAdapter {
     return toSafe(user);
   }
 
+  async updateUserTier(id: string, tier: PricingTier): Promise<SafeUser | null> {
+    const user = this.users.get(id);
+    if (!user) return null;
+    user.tier = tier;
+    this.users.set(id, user);
+    return toSafe(user);
+  }
+
   async updateUserPassword(id: string, passwordHash: string): Promise<boolean> {
     const user = this.users.get(id);
     if (!user) return false;
@@ -100,11 +115,7 @@ export class MemoryAdapter implements DbAdapter {
 
   // --- Resumes ---
 
-  async createResume(
-    userId: string,
-    name: string,
-    latex: string
-  ): Promise<Resume> {
+  async createResume(userId: string, name: string, latex: string): Promise<Resume> {
     const id = uuidv4();
     const now = new Date().toISOString();
     const resume: Resume = { id, userId, name, latex, createdAt: now, updatedAt: now };
@@ -116,10 +127,7 @@ export class MemoryAdapter implements DbAdapter {
     return this.resumes.get(id) || null;
   }
 
-  async updateResume(
-    id: string,
-    updates: UpdateResumeInput
-  ): Promise<Resume | null> {
+  async updateResume(id: string, updates: UpdateResumeInput): Promise<Resume | null> {
     const resume = this.resumes.get(id);
     if (!resume) return null;
     if (updates.name) resume.name = updates.name;
@@ -135,18 +143,14 @@ export class MemoryAdapter implements DbAdapter {
 
   async listResumes(): Promise<Resume[]> {
     return Array.from(this.resumes.values()).sort(
-      (a, b) =>
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     );
   }
 
   async listResumesByUser(userId: string): Promise<Resume[]> {
     return Array.from(this.resumes.values())
       .filter((r) => r.userId === userId)
-      .sort(
-        (a, b) =>
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      );
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
 
   async getResumeCount(): Promise<number> {
@@ -154,26 +158,14 @@ export class MemoryAdapter implements DbAdapter {
   }
 
   async getResumeCountByUser(userId: string): Promise<number> {
-    return Array.from(this.resumes.values()).filter(
-      (r) => r.userId === userId
-    ).length;
+    return Array.from(this.resumes.values()).filter((r) => r.userId === userId).length;
   }
 
   // --- Email tokens ---
 
-  async createEmailToken(
-    email: string,
-    type: EmailToken["type"],
-    token: string,
-    expiresAt: string
-  ): Promise<EmailToken> {
+  async createEmailToken(email: string, type: EmailToken["type"], token: string, expiresAt: string): Promise<EmailToken> {
     const entry: EmailToken = {
-      id: uuidv4(),
-      email,
-      type,
-      token,
-      expiresAt,
-      usedAt: null,
+      id: uuidv4(), email, type, token, expiresAt, usedAt: null,
       createdAt: new Date().toISOString(),
     };
     this.emailTokens.set(token, entry);
@@ -226,5 +218,64 @@ export class MemoryAdapter implements DbAdapter {
       entry.count++;
       this.rateLimits.set(key, entry);
     }
+  }
+
+  // --- MCP call logging ---
+
+  async logMcpCall(userId: string, method: string, toolName: string | null): Promise<McpCallLog> {
+    const entry: McpCallLog = {
+      id: uuidv4(), userId, method, toolName,
+      timestamp: new Date().toISOString(),
+    };
+    this.mcpCalls.push(entry);
+    return entry;
+  }
+
+  async getMcpCallCount(userId: string, since: string): Promise<number> {
+    return this.mcpCalls.filter((c) => c.userId === userId && c.timestamp >= since).length;
+  }
+
+  async getMcpCallCountAll(since: string): Promise<number> {
+    return this.mcpCalls.filter((c) => c.timestamp >= since).length;
+  }
+
+  async getMcpCallsByUser(userId: string, since: string, limit = 50): Promise<McpCallLog[]> {
+    return this.mcpCalls
+      .filter((c) => c.userId === userId && c.timestamp >= since)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, limit);
+  }
+
+  async getMcpCallsAll(since: string, limit = 50): Promise<McpCallLog[]> {
+    return this.mcpCalls
+      .filter((c) => c.timestamp >= since)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, limit);
+  }
+
+  async getMcpCallCountPerUser(since: string): Promise<{ userId: string; count: number }[]> {
+    const counts = new Map<string, number>();
+    for (const c of this.mcpCalls) {
+      if (c.timestamp >= since) {
+        counts.set(c.userId, (counts.get(c.userId) || 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .map(([userId, count]) => ({ userId, count }))
+      .sort((a, b) => b.count - a.count);
+  }
+
+  // --- Platform config ---
+
+  async getConfig(key: string): Promise<string | null> {
+    return this.config.get(key)?.value ?? null;
+  }
+
+  async setConfig(key: string, value: string): Promise<void> {
+    this.config.set(key, { key, value, updatedAt: new Date().toISOString() });
+  }
+
+  async getAllConfig(): Promise<PlatformConfig[]> {
+    return Array.from(this.config.values());
   }
 }

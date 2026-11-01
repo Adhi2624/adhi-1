@@ -1,9 +1,14 @@
 import { getDb } from "@/lib/db";
+import { DEFAULT_RATE_LIMITS } from "@/lib/db/types";
 
-const RATE_LIMITS: Record<string, { maxPerWindow: number; windowMinutes: number }> = {
-  verification: { maxPerWindow: 3, windowMinutes: 60 },
-  "password-reset": { maxPerWindow: 3, windowMinutes: 60 },
-};
+async function getRateLimitsConfig(): Promise<Record<string, { maxPerWindow: number; windowMinutes: number }>> {
+  const db = await getDb();
+  const raw = await db.getConfig("rate_limits");
+  if (raw) {
+    return JSON.parse(raw);
+  }
+  return DEFAULT_RATE_LIMITS;
+}
 
 function getWindowStart(windowMinutes: number): string {
   const now = new Date();
@@ -13,7 +18,8 @@ function getWindowStart(windowMinutes: number): string {
 }
 
 export async function checkEmailRateLimit(email: string, type: string): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
-  const config = RATE_LIMITS[type] || { maxPerWindow: 5, windowMinutes: 60 };
+  const allLimits = await getRateLimitsConfig();
+  const config = allLimits[type] || { maxPerWindow: 5, windowMinutes: 60 };
   const windowStart = getWindowStart(config.windowMinutes);
 
   const db = await getDb();
@@ -29,7 +35,8 @@ export async function checkEmailRateLimit(email: string, type: string): Promise<
 }
 
 export async function recordEmailSend(email: string, type: string): Promise<void> {
-  const config = RATE_LIMITS[type] || { maxPerWindow: 5, windowMinutes: 60 };
+  const allLimits = await getRateLimitsConfig();
+  const config = allLimits[type] || { maxPerWindow: 5, windowMinutes: 60 };
   const windowStart = getWindowStart(config.windowMinutes);
 
   const db = await getDb();

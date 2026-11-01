@@ -215,4 +215,109 @@ describe("MemoryAdapter", () => {
       expect(await db.getEmailSendCount("a@t.com", "password-reset", window)).toBe(1);
     });
   });
+
+  describe("User tiers", () => {
+    it("creates users with free tier by default", async () => {
+      const user = await db.createUser({ name: "A", email: "a@t.com", passwordHash: "h" });
+      expect(user.tier).toBe("free");
+    });
+
+    it("updates user tier", async () => {
+      const user = await db.createUser({ name: "A", email: "a@t.com", passwordHash: "h" });
+      const updated = await db.updateUserTier(user.id, "pro");
+      expect(updated!.tier).toBe("pro");
+    });
+
+    it("returns null for non-existent user tier update", async () => {
+      expect(await db.updateUserTier("ghost", "pro")).toBeNull();
+    });
+  });
+
+  describe("MCP call logging", () => {
+    it("logs an MCP call", async () => {
+      const log = await db.logMcpCall("user-1", "tools/call", "list_templates");
+      expect(log.userId).toBe("user-1");
+      expect(log.method).toBe("tools/call");
+      expect(log.toolName).toBe("list_templates");
+      expect(log.id).toBeDefined();
+      expect(log.timestamp).toBeDefined();
+    });
+
+    it("counts MCP calls per user since a timestamp", async () => {
+      const past = new Date(Date.now() - 10000).toISOString();
+      await db.logMcpCall("user-1", "tools/call", "list_templates");
+      await db.logMcpCall("user-1", "tools/call", "get_template");
+      await db.logMcpCall("user-2", "tools/call", "list_templates");
+
+      expect(await db.getMcpCallCount("user-1", past)).toBe(2);
+      expect(await db.getMcpCallCount("user-2", past)).toBe(1);
+    });
+
+    it("counts all MCP calls since a timestamp", async () => {
+      const past = new Date(Date.now() - 10000).toISOString();
+      await db.logMcpCall("user-1", "tools/call", "t1");
+      await db.logMcpCall("user-2", "tools/call", "t2");
+
+      expect(await db.getMcpCallCountAll(past)).toBe(2);
+    });
+
+    it("gets MCP calls by user with limit", async () => {
+      const past = new Date(Date.now() - 10000).toISOString();
+      await db.logMcpCall("user-1", "tools/call", "t1");
+      await db.logMcpCall("user-1", "tools/call", "t2");
+      await db.logMcpCall("user-1", "tools/call", "t3");
+
+      const calls = await db.getMcpCallsByUser("user-1", past, 2);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("gets all MCP calls with limit", async () => {
+      const past = new Date(Date.now() - 10000).toISOString();
+      await db.logMcpCall("user-1", "tools/call", "t1");
+      await db.logMcpCall("user-2", "tools/call", "t2");
+      await db.logMcpCall("user-1", "tools/call", "t3");
+
+      const calls = await db.getMcpCallsAll(past, 2);
+      expect(calls).toHaveLength(2);
+    });
+
+    it("gets MCP call counts per user", async () => {
+      const past = new Date(Date.now() - 10000).toISOString();
+      await db.logMcpCall("user-1", "tools/call", "t1");
+      await db.logMcpCall("user-1", "tools/call", "t2");
+      await db.logMcpCall("user-2", "tools/call", "t3");
+
+      const counts = await db.getMcpCallCountPerUser(past);
+      expect(counts).toHaveLength(2);
+      expect(counts[0].userId).toBe("user-1");
+      expect(counts[0].count).toBe(2);
+      expect(counts[1].userId).toBe("user-2");
+      expect(counts[1].count).toBe(1);
+    });
+  });
+
+  describe("Platform config", () => {
+    it("returns null for non-existent config", async () => {
+      expect(await db.getConfig("nonexistent")).toBeNull();
+    });
+
+    it("sets and gets config", async () => {
+      await db.setConfig("test_key", "test_value");
+      expect(await db.getConfig("test_key")).toBe("test_value");
+    });
+
+    it("overwrites existing config", async () => {
+      await db.setConfig("key", "old");
+      await db.setConfig("key", "new");
+      expect(await db.getConfig("key")).toBe("new");
+    });
+
+    it("lists all config entries", async () => {
+      await db.setConfig("key1", "val1");
+      await db.setConfig("key2", "val2");
+      const all = await db.getAllConfig();
+      expect(all).toHaveLength(2);
+      expect(all.map((c) => c.key).sort()).toEqual(["key1", "key2"]);
+    });
+  });
 });

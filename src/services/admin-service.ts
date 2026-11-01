@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import type { SafeUser, UserRole } from "@/lib/db/types";
+import type { SafeUser, UserRole, PricingTier } from "@/lib/db/types";
 
 export interface AdminStats {
   totalUsers: number;
@@ -50,6 +50,22 @@ export class AdminService {
     }
     const db = await getDb();
     const updated = await db.updateUserRole(userId, role);
+    if (!updated) {
+      throw new AdminError("User not found", 404);
+    }
+    return updated;
+  }
+
+  async updateUserTier(userId: string, tier: PricingTier): Promise<SafeUser> {
+    if (!userId || !tier) {
+      throw new AdminError("userId and tier required", 400);
+    }
+    const validTiers: PricingTier[] = ["free", "pro", "team"];
+    if (!validTiers.includes(tier)) {
+      throw new AdminError("Invalid tier. Must be: free, pro, or team", 400);
+    }
+    const db = await getDb();
+    const updated = await db.updateUserTier(userId, tier);
     if (!updated) {
       throw new AdminError("User not found", 404);
     }

@@ -15,6 +15,12 @@ vi.mock("@/lib/db", () => ({
       user.role = role;
       return user;
     }),
+    updateUserTier: vi.fn().mockImplementation(async (id: string, tier: string) => {
+      const user = mockUsers.get(id);
+      if (!user) return null;
+      (user as Record<string, unknown>).tier = tier;
+      return user;
+    }),
     deleteUser: vi.fn().mockImplementation(async (id: string) => {
       return mockUsers.delete(id);
     }),
@@ -75,6 +81,25 @@ describe("AdminService", () => {
 
     it("throws AdminError for non-existent user", async () => {
       await expect(service.updateUserRole("fake-id", "admin")).rejects.toThrow(AdminError);
+    });
+  });
+
+  describe("updateUserTier", () => {
+    it("updates a user tier", async () => {
+      const updated = await service.updateUserTier("user-1", "pro");
+      expect((updated as Record<string, unknown>).tier).toBe("pro");
+    });
+
+    it("throws AdminError for missing userId", async () => {
+      await expect(service.updateUserTier("", "pro")).rejects.toThrow(AdminError);
+    });
+
+    it("throws AdminError for invalid tier", async () => {
+      await expect(service.updateUserTier("user-1", "invalid" as "free")).rejects.toThrow(AdminError);
+    });
+
+    it("throws AdminError for non-existent user", async () => {
+      await expect(service.updateUserTier("fake-id", "pro")).rejects.toThrow(AdminError);
     });
   });
 

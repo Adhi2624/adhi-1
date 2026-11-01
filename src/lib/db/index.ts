@@ -36,7 +36,6 @@ async function createAdapter(): Promise<DbAdapter> {
     }
 
     case "d1": {
-      // D1 binding is passed via globalThis in Cloudflare Workers/Pages
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const binding = (globalThis as any).DB || (globalThis as any).__env?.DB;
       if (!binding) {
@@ -76,9 +75,14 @@ export type {
   User,
   SafeUser,
   UserRole,
+  PricingTier,
   Resume,
   CreateUserInput,
   UpdateResumeInput,
   EmailToken,
   EmailRateLimit,
+  McpCallLog,
+  PlatformConfig,
+  TierLimits,
 } from "./types";
+export { DEFAULT_TIER_LIMITS, DEFAULT_RATE_LIMITS } from "./types";

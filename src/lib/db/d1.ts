@@ -4,10 +4,13 @@ import type {
   User,
   SafeUser,
   UserRole,
+  PricingTier,
   Resume,
   CreateUserInput,
   UpdateResumeInput,
   EmailToken,
+  McpCallLog,
+  PlatformConfig,
 } from "./types";
 
 export interface D1Database {
@@ -40,15 +43,21 @@ interface D1UserRow {
   email: string;
   passwordHash: string;
   role: UserRole;
+  tier: string;
   emailVerified: number;
   createdAt: string;
 }
 
 function rowToUser(row: D1UserRow): User {
-  return { ...row, emailVerified: Boolean(row.emailVerified) };
+  return {
+    ...row,
+    tier: (row.tier || "free") as PricingTier,
+    emailVerified: Boolean(row.emailVerified),
+  };
 }
 
 function toSafe(user: User): SafeUser {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { passwordHash: _, ...safe } = user;
   return safe;
 }
@@ -60,6 +69,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   passwordHash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
+  tier TEXT NOT NULL DEFAULT 'free',
   emailVerified INTEGER NOT NULL DEFAULT 0,
   createdAt TEXT NOT NULL
 );
@@ -91,10 +101,26 @@ CREATE TABLE IF NOT EXISTS email_rate_limits (
   PRIMARY KEY (email, type, windowStart)
 );
 
+CREATE TABLE IF NOT EXISTS mcp_call_logs (
+  id TEXT PRIMARY KEY,
+  userId TEXT NOT NULL,
+  method TEXT NOT NULL,
+  toolName TEXT,
+  timestamp TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS platform_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_resumes_userId ON resumes(userId);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_email_tokens_token ON email_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_rate_limits_lookup ON email_rate_limits(email, type, windowStart);
+CREATE INDEX IF NOT EXISTS idx_mcp_calls_user_ts ON mcp_call_logs(userId, timestamp);
+CREATE INDEX IF NOT EXISTS idx_mcp_calls_ts ON mcp_call_logs(timestamp);
 `;
 
 export class D1Adapter implements DbAdapter {
@@ -130,12 +156,15 @@ export class D1Adapter implements DbAdapter {
 
     await this.db
       .prepare(
-        "INSERT INTO users (id, name, email, passwordHash, role, emailVerified, createdAt) VALUES (?, ?, ?, ?, 'user', 0, ?)"
+        "INSERT INTO users (id, name, email, passwordHash, role, tier, emailVerified, createdAt) VALUES (?, ?, ?, ?, 'user', 'free', 0, ?)"
       )
       .bind(id, input.name, input.email, input.passwordHash, createdAt)
       .run();
 
-    return { id, name: input.name, email: input.email, role: "user", emailVerified: false, createdAt };
+    return {
+      id, name: input.name, email: input.email,
+      role: "user", tier: "free", emailVerified: false, createdAt,
+    };
   }
 
   async getUserByEmail(email: string): Promise<User | null> {
@@ -171,6 +200,15 @@ export class D1Adapter implements DbAdapter {
     await this.db
       .prepare("UPDATE users SET role = ? WHERE id = ?")
       .bind(role, id)
+      .run();
+    return this.getUserById(id);
+  }
+
+  async updateUserTier(id: string, tier: PricingTier): Promise<SafeUser | null> {
+    await this.ensureInit();
+    await this.db
+      .prepare("UPDATE users SET tier = ? WHERE id = ?")
+      .bind(tier, id)
       .run();
     return this.getUserById(id);
   }
@@ -219,11 +257,7 @@ export class D1Adapter implements DbAdapter {
 
   // --- Resumes ---
 
-  async createResume(
-    userId: string,
-    name: string,
-    latex: string
-  ): Promise<Resume> {
+  async createResume(userId: string, name: string, latex: string): Promise<Resume> {
     await this.ensureInit();
     const id = uuidv4();
     const now = new Date().toISOString();
@@ -246,10 +280,7 @@ export class D1Adapter implements DbAdapter {
       .first<Resume>();
   }
 
-  async updateResume(
-    id: string,
-    updates: UpdateResumeInput
-  ): Promise<Resume | null> {
+  async updateResume(id: string, updates: UpdateResumeInput): Promise<Resume | null> {
     await this.ensureInit();
     const sets: string[] = ["updatedAt = ?"];
     const values: unknown[] = [new Date().toISOString()];
@@ -292,9 +323,7 @@ export class D1Adapter implements DbAdapter {
   async listResumesByUser(userId: string): Promise<Resume[]> {
     await this.ensureInit();
     const result = await this.db
-      .prepare(
-        "SELECT * FROM resumes WHERE userId = ? ORDER BY updatedAt DESC"
-      )
+      .prepare("SELECT * FROM resumes WHERE userId = ? ORDER BY updatedAt DESC")
       .bind(userId)
       .all<Resume>();
     return result.results;
@@ -320,10 +349,7 @@ export class D1Adapter implements DbAdapter {
   // --- Email tokens ---
 
   async createEmailToken(
-    email: string,
-    type: EmailToken["type"],
-    token: string,
-    expiresAt: string
+    email: string, type: EmailToken["type"], token: string, expiresAt: string
   ): Promise<EmailToken> {
     await this.ensureInit();
     const id = uuidv4();
@@ -386,5 +412,92 @@ export class D1Adapter implements DbAdapter {
       )
       .bind(email, type, windowStart)
       .run();
+  }
+
+  // --- MCP call logging ---
+
+  async logMcpCall(userId: string, method: string, toolName: string | null): Promise<McpCallLog> {
+    await this.ensureInit();
+    const id = uuidv4();
+    const timestamp = new Date().toISOString();
+    await this.db
+      .prepare("INSERT INTO mcp_call_logs (id, userId, method, toolName, timestamp) VALUES (?, ?, ?, ?, ?)")
+      .bind(id, userId, method, toolName, timestamp)
+      .run();
+    return { id, userId, method, toolName, timestamp };
+  }
+
+  async getMcpCallCount(userId: string, since: string): Promise<number> {
+    await this.ensureInit();
+    const count = await this.db
+      .prepare("SELECT COUNT(*) as count FROM mcp_call_logs WHERE userId = ? AND timestamp >= ?")
+      .bind(userId, since)
+      .first<number>("count");
+    return count ?? 0;
+  }
+
+  async getMcpCallCountAll(since: string): Promise<number> {
+    await this.ensureInit();
+    const count = await this.db
+      .prepare("SELECT COUNT(*) as count FROM mcp_call_logs WHERE timestamp >= ?")
+      .bind(since)
+      .first<number>("count");
+    return count ?? 0;
+  }
+
+  async getMcpCallsByUser(userId: string, since: string, limit = 50): Promise<McpCallLog[]> {
+    await this.ensureInit();
+    const result = await this.db
+      .prepare("SELECT * FROM mcp_call_logs WHERE userId = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?")
+      .bind(userId, since, limit)
+      .all<McpCallLog>();
+    return result.results;
+  }
+
+  async getMcpCallsAll(since: string, limit = 50): Promise<McpCallLog[]> {
+    await this.ensureInit();
+    const result = await this.db
+      .prepare("SELECT * FROM mcp_call_logs WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?")
+      .bind(since, limit)
+      .all<McpCallLog>();
+    return result.results;
+  }
+
+  async getMcpCallCountPerUser(since: string): Promise<{ userId: string; count: number }[]> {
+    await this.ensureInit();
+    const result = await this.db
+      .prepare("SELECT userId, COUNT(*) as count FROM mcp_call_logs WHERE timestamp >= ? GROUP BY userId ORDER BY count DESC")
+      .bind(since)
+      .all<{ userId: string; count: number }>();
+    return result.results;
+  }
+
+  // --- Platform config ---
+
+  async getConfig(key: string): Promise<string | null> {
+    await this.ensureInit();
+    const value = await this.db
+      .prepare("SELECT value FROM platform_config WHERE key = ?")
+      .bind(key)
+      .first<string>("value");
+    return value ?? null;
+  }
+
+  async setConfig(key: string, value: string): Promise<void> {
+    await this.ensureInit();
+    await this.db
+      .prepare(
+        "INSERT INTO platform_config (key, value, updatedAt) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = ?, updatedAt = ?"
+      )
+      .bind(key, value, new Date().toISOString(), value, new Date().toISOString())
+      .run();
+  }
+
+  async getAllConfig(): Promise<PlatformConfig[]> {
+    await this.ensureInit();
+    const result = await this.db
+      .prepare("SELECT * FROM platform_config ORDER BY key")
+      .all<PlatformConfig>();
+    return result.results;
   }
 }

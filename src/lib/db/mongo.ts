@@ -5,14 +5,18 @@ import type {
   User,
   SafeUser,
   UserRole,
+  PricingTier,
   Resume,
   CreateUserInput,
   UpdateResumeInput,
   EmailToken,
   EmailRateLimit,
+  McpCallLog,
+  PlatformConfig,
 } from "./types";
 
 function toSafe(user: User): SafeUser {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { passwordHash: _, ...safe } = user;
   return safe;
 }
@@ -24,6 +28,8 @@ export class MongoAdapter implements DbAdapter {
   private resumes: Collection<Resume>;
   private emailTokens: Collection<EmailToken>;
   private rateLimits: Collection<EmailRateLimit>;
+  private mcpCallLogs: Collection<McpCallLog>;
+  private platformConfig: Collection<PlatformConfig>;
 
   constructor(uri: string, dbName: string = "typeset") {
     this.client = new MongoClient(uri);
@@ -32,6 +38,8 @@ export class MongoAdapter implements DbAdapter {
     this.resumes = this.db.collection<Resume>("resumes");
     this.emailTokens = this.db.collection<EmailToken>("email_tokens");
     this.rateLimits = this.db.collection<EmailRateLimit>("email_rate_limits");
+    this.mcpCallLogs = this.db.collection<McpCallLog>("mcp_call_logs");
+    this.platformConfig = this.db.collection<PlatformConfig>("platform_config");
   }
 
   async init(): Promise<void> {
@@ -43,6 +51,9 @@ export class MongoAdapter implements DbAdapter {
     await this.emailTokens.createIndex({ token: 1 }, { unique: true });
     await this.emailTokens.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     await this.rateLimits.createIndex({ email: 1, type: 1 });
+    await this.mcpCallLogs.createIndex({ userId: 1, timestamp: -1 });
+    await this.mcpCallLogs.createIndex({ timestamp: -1 });
+    await this.platformConfig.createIndex({ key: 1 }, { unique: true });
   }
 
   // --- Users ---
@@ -57,6 +68,7 @@ export class MongoAdapter implements DbAdapter {
       email: input.email,
       passwordHash: input.passwordHash,
       role: "user",
+      tier: "free",
       emailVerified: false,
       createdAt: new Date().toISOString(),
     };
@@ -93,6 +105,15 @@ export class MongoAdapter implements DbAdapter {
     return result ? toSafe(result) : null;
   }
 
+  async updateUserTier(id: string, tier: PricingTier): Promise<SafeUser | null> {
+    const result = await this.users.findOneAndUpdate(
+      { id },
+      { $set: { tier } },
+      { returnDocument: "after", projection: { _id: 0 } }
+    );
+    return result ? toSafe(result) : null;
+  }
+
   async updateUserPassword(id: string, passwordHash: string): Promise<boolean> {
     const result = await this.users.updateOne({ id }, { $set: { passwordHash } });
     return result.modifiedCount > 0;
@@ -118,19 +139,10 @@ export class MongoAdapter implements DbAdapter {
 
   // --- Resumes ---
 
-  async createResume(
-    userId: string,
-    name: string,
-    latex: string
-  ): Promise<Resume> {
+  async createResume(userId: string, name: string, latex: string): Promise<Resume> {
     const now = new Date().toISOString();
     const resume: Resume = {
-      id: uuidv4(),
-      userId,
-      name,
-      latex,
-      createdAt: now,
-      updatedAt: now,
+      id: uuidv4(), userId, name, latex, createdAt: now, updatedAt: now,
     };
     await this.resumes.insertOne(resume);
     return resume;
@@ -140,10 +152,7 @@ export class MongoAdapter implements DbAdapter {
     return this.resumes.findOne({ id }, { projection: { _id: 0 } });
   }
 
-  async updateResume(
-    id: string,
-    updates: UpdateResumeInput
-  ): Promise<Resume | null> {
+  async updateResume(id: string, updates: UpdateResumeInput): Promise<Resume | null> {
     const setFields: Record<string, string> = {
       updatedAt: new Date().toISOString(),
     };
@@ -187,18 +196,10 @@ export class MongoAdapter implements DbAdapter {
   // --- Email tokens ---
 
   async createEmailToken(
-    email: string,
-    type: EmailToken["type"],
-    token: string,
-    expiresAt: string
+    email: string, type: EmailToken["type"], token: string, expiresAt: string
   ): Promise<EmailToken> {
     const entry: EmailToken = {
-      id: uuidv4(),
-      email,
-      type,
-      token,
-      expiresAt,
-      usedAt: null,
+      id: uuidv4(), email, type, token, expiresAt, usedAt: null,
       createdAt: new Date().toISOString(),
     };
     await this.emailTokens.insertOne(entry);
@@ -208,9 +209,7 @@ export class MongoAdapter implements DbAdapter {
   async getEmailToken(token: string, type: EmailToken["type"]): Promise<EmailToken | null> {
     return this.emailTokens.findOne(
       {
-        token,
-        type,
-        usedAt: null,
+        token, type, usedAt: null,
         expiresAt: { $gt: new Date().toISOString() },
       },
       { projection: { _id: 0 } }
@@ -248,5 +247,70 @@ export class MongoAdapter implements DbAdapter {
       { $inc: { count: 1 }, $setOnInsert: { email, type, windowStart } },
       { upsert: true }
     );
+  }
+
+  // --- MCP call logging ---
+
+  async logMcpCall(userId: string, method: string, toolName: string | null): Promise<McpCallLog> {
+    const entry: McpCallLog = {
+      id: uuidv4(), userId, method, toolName,
+      timestamp: new Date().toISOString(),
+    };
+    await this.mcpCallLogs.insertOne(entry);
+    return entry;
+  }
+
+  async getMcpCallCount(userId: string, since: string): Promise<number> {
+    return this.mcpCallLogs.countDocuments({ userId, timestamp: { $gte: since } });
+  }
+
+  async getMcpCallCountAll(since: string): Promise<number> {
+    return this.mcpCallLogs.countDocuments({ timestamp: { $gte: since } });
+  }
+
+  async getMcpCallsByUser(userId: string, since: string, limit = 50): Promise<McpCallLog[]> {
+    return this.mcpCallLogs
+      .find({ userId, timestamp: { $gte: since } }, { projection: { _id: 0 } })
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  async getMcpCallsAll(since: string, limit = 50): Promise<McpCallLog[]> {
+    return this.mcpCallLogs
+      .find({ timestamp: { $gte: since } }, { projection: { _id: 0 } })
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  async getMcpCallCountPerUser(since: string): Promise<{ userId: string; count: number }[]> {
+    return this.mcpCallLogs
+      .aggregate<{ userId: string; count: number }>([
+        { $match: { timestamp: { $gte: since } } },
+        { $group: { _id: "$userId", count: { $sum: 1 } } },
+        { $project: { _id: 0, userId: "$_id", count: 1 } },
+        { $sort: { count: -1 } },
+      ])
+      .toArray();
+  }
+
+  // --- Platform config ---
+
+  async getConfig(key: string): Promise<string | null> {
+    const doc = await this.platformConfig.findOne({ key });
+    return doc?.value ?? null;
+  }
+
+  async setConfig(key: string, value: string): Promise<void> {
+    await this.platformConfig.updateOne(
+      { key },
+      { $set: { key, value, updatedAt: new Date().toISOString() } },
+      { upsert: true }
+    );
+  }
+
+  async getAllConfig(): Promise<PlatformConfig[]> {
+    return this.platformConfig.find({}, { projection: { _id: 0 } }).toArray();
   }
 }
